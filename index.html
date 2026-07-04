@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Asisten Sensus Bos Ulul</title>
+  
+  <!-- Memuat Tailwind CSS untuk styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Import Map untuk memuat React dan dependensinya langsung di browser -->
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.294.0"
+      }
+    }
+  </script>
+  
+  <!-- Babel Standalone untuk menerjemahkan JSX menjadi Javascript standar di browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Script aplikasi menggunakan tipe module dan text/babel -->
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Send, Bot, User, FileText, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
+
+    const initialData = {
+      p15_a_listrik: null,
+      p15_b_pulsa: null,
+      p16_a_makan_mingguan: null,
+      p16_b_bukan_makan_bulan: null,
+      p16_c_bukan_makan_tahun: null,
+      p26_a_upah: null,
+      p26_b_produksi: null,
+      p26_c_lainnya: null,
+      p26_d_operasional: null,
+      p26_e_non_operasional: null,
+      p27_a_pendapatan_utama: null,
+      p27_b_pendapatan_lainnya: null,
+    };
+
+    function SensusBot() {
+      const [messages, setMessages] = useState([]);
+      const [input, setInput] = useState('');
+      const [isLoading, setIsLoading] = useState(false);
+      const [sensusData, setSensusData] = useState(initialData);
+      const [isFinished, setIsFinished] = useState(false);
+      const messagesEndRef = useRef(null);
+
+      // Auto-scroll ke pesan terbaru
+      const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      };
+      useEffect(() => scrollToBottom(), [messages]);
+
+      const formatRp = (value) => {
+        if (value === null || value === undefined) return '__________';
+        return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(value);
+      };
+
+      const totalPengeluaran26f = 
+        (sensusData.p26_a_upah || 0) + 
+        (sensusData.p26_b_produksi || 0) + 
+        (sensusData.p26_c_lainnya || 0) + 
+        (sensusData.p26_d_operasional || 0) + 
+        (sensusData.p26_e_non_operasional || 0);
+
+      const totalPendapatan27c = 
+        (sensusData.p27_a_pendapatan_utama || 0) + 
+        (sensusData.p27_b_pendapatan_lainnya || 0);
+
+      const pendapatanBulan = totalPendapatan27c > 0 ? totalPendapatan27c / 12 : 0;
+      const isRugi = totalPengeluaran26f > totalPendapatan27c;
+
+      const callGeminiAPI = async (userText, history, currentData) => {
+        const apiKey = "AQ.Ab8RN6I7icmbIH4LJRNiPtBfSNpV5LWypHYTl3kQ-yd6uRJp0Q";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+        const systemPrompt = `
+          Anda adalah "BPS Bot", asisten cerdas sensus UMKM.
+          Tugas utama Anda sekarang: Ketika pengguna memberikan deskripsi singkat tentang usaha mereka, Anda harus MEMPREDIKSI angka-angkanya dengan PERSENTASE MUTLAK berikut:
+
+          1. Ringkasan Usaha (Dihitung dari Total Pendapatan):
+             - Total Pendapatan Usaha = 100%
+             - Total Pengeluaran Usaha (26.f) = 60,00% (menyerap 60% omzet)
+             - Margin Keuntungan Bersih = 40,00% (sisa keuntungan bersih)
+
+          2. Blok 27 (Rincian Pendapatan 2025 - Dihitung dari Poin 27.c/Total Pendapatan Usaha):
+             - 27.a Nilai produksi/pendapatan utama = 93,33%
+             - 27.b Pendapatan lainnya = 6,67%
+             - 27.c Total = 100%
+
+          3. Blok 26 (Rincian Pengeluaran 2025 - Dihitung dari Poin 26.f/Total Pengeluaran Usaha):
+             - 26.a Total upah = 20,00%
+             - 26.b Biaya produksi = 55,56%
+             - 26.c Biaya lainnya = 4,44%
+             - 26.d Biaya operasional = 16,67%
+             - 26.e Biaya non-operasional = 3,33%
+             - 26.f Total = 100%
+
+          4. Blok 15 & 16 (Pengeluaran Rumah Tangga - Dihitung dari Total Pengeluaran Konsumsi Bulanan):
+             Tentukan dulu "Total Pengeluaran Konsumsi Bulanan" yang logis dari keuntungan bulanan. Lalu terapkan persentase ini:
+             - 15.a Pengeluaran listrik = 8,11% (Periode Bulanan)
+             - 15.b Pengeluaran pulsa/internet = 5,41% (Periode Bulanan)
+             - 16.a Makanan keluarga = 52,68% (PERHATIAN: Kolom ini mingguan. Hitung 52,68% dari total bulanan, lalu BAGI 4)
+             - 16.b Bukan makanan rutin = 40,56% (Periode Bulanan)
+             - 16.c Bukan makanan non-rutin = 6,76% (PERHATIAN: Kolom ini tahunan. Hitung 6,76% dari total bulanan, lalu KALI 12)
+
+          Dalam balasan teks (replyToUser), sampaikan dengan ramah bahwa ini adalah hasil prediksi sistem berdasarkan estimasi standar UMKM dan persilakan pengguna mengoreksinya. Pastikan angka diekstrak dibulatkan agar rapi (ribuan terdekat).
+          
+          Data yang sudah terisi saat ini: ${JSON.stringify(currentData)}.
+        `;
+
+        // Siapkan riwayat chat untuk API
+        const formattedHistory = history.map(msg => ({
+          role: msg.role === 'bot' ? 'model' : 'user',
+          parts: [{ text: msg.text }]
+        }));
+        
+        // Tambahkan input pengguna saat ini
+        if (userText) {
+          formattedHistory.push({ role: 'user', parts: [{ text: userText }] });
+        }
+
+        const payload = {
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: formattedHistory,
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                replyToUser: { type: "STRING", description: "Pesan balasan percakapan untuk pengguna." },
+                p15_a_listrik: { type: "NUMBER", nullable: true },
+                p15_b_pulsa: { type: "NUMBER", nullable: true },
+                p16_a_makan_mingguan: { type: "NUMBER", nullable: true },
+                p16_b_bukan_makan_bulan: { type: "NUMBER", nullable: true },
+                p16_c_bukan_makan_tahun: { type: "NUMBER", nullable: true },
+                p26_a_upah: { type: "NUMBER", nullable: true },
+                p26_b_produksi: { type: "NUMBER", nullable: true },
+                p26_c_lainnya: { type: "NUMBER", nullable: true },
+                p26_d_operasional: { type: "NUMBER", nullable: true },
+                p26_e_non_operasional: { type: "NUMBER", nullable: true },
+                p27_a_pendapatan_utama: { type: "NUMBER", nullable: true },
+                p27_b_pendapatan_lainnya: { type: "NUMBER", nullable: true },
+                isFinished: { type: "BOOLEAN", description: "Ubah jadi true jika semua kolom data sudah terjawab dengan lengkap." }
+              },
+              required: ["replyToUser", "isFinished"]
+            }
+          }
+        };
+
+        try {
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await response.json();
+          if (data.candidates && data.candidates[0].content.parts[0].text) {
+            return JSON.parse(data.candidates[0].content.parts[0].text);
+          }
+        } catch (error) {
+          console.error("API Error:", error);
+          return { replyToUser: "Maaf, sistem sedang sibuk. Bisa diulangi pesannya?", isFinished: false };
+        }
+      };
+
+      useEffect(() => {
+        const initChat = async () => {
+          setIsLoading(true);
+          const response = await callGeminiAPI("", [], initialData);
+          setMessages([{ role: 'bot', text: response.replyToUser }]);
+          setIsLoading(false);
+        };
+        initChat();
+      }, []);
+
+      const handleSend = async (e) => {
+        e.preventDefault();
+        if (!input.trim() || isLoading) return;
+
+        const userMsg = input.trim();
+        setInput('');
+        const newMessages = [...messages, { role: 'user', text: userMsg }];
+        setMessages(newMessages);
+        setIsLoading(true);
+
+        const responseData = await callGeminiAPI(userMsg, messages, sensusData);
+        
+        // Perbarui data yang diekstrak oleh AI
+        setSensusData(prev => {
+          const updated = { ...prev };
+          Object.keys(updated).forEach(key => {
+            if (responseData[key] !== undefined && responseData[key] !== null) {
+              updated[key] = responseData[key];
+            }
+          });
+          return updated;
+        });
+
+        if (responseData.isFinished) setIsFinished(true);
+
+        setMessages([...newMessages, { role: 'bot', text: responseData.replyToUser }]);
+        setIsLoading(false);
+      };
+
+      const handleReset = () => {
+        setMessages([]);
+        setSensusData(initialData);
+        setIsFinished(false);
+        setIsLoading(true);
+        callGeminiAPI("", [], initialData).then(res => {
+          setMessages([{ role: 'bot', text: res.replyToUser }]);
+          setIsLoading(false);
+        });
+      };
+
+      return (
+        <div className="flex h-screen bg-pink-50/30 text-slate-800 font-sans">
+          
+          {/* Kiri: Area Chatbot */}
+          <div className="w-full md:w-5/12 bg-white flex flex-col border-r border-pink-100 shadow-2xl z-10 relative md:rounded-r-3xl overflow-hidden">
+            <div className="bg-gradient-to-r from-purple-500 to-pink-500 text-white p-4 flex items-center justify-between shadow-md">
+              <div className="flex items-center gap-3">
+                <div className="bg-white p-2 rounded-2xl text-purple-500 shadow-sm transform rotate-3">
+                  <Bot size={26} />
+                </div>
+                <div>
+                  <h1 className="font-extrabold text-xl leading-tight drop-shadow-sm">Asisten Sensus Bos Ulul 🚀</h1>
+                  <p className="text-pink-100 text-xs font-medium mt-0.5">Semangat Bos Ulul! Pasti bisa! 💪</p>
+                </div>
+              </div>
+              <button onClick={handleReset} className="p-2 hover:bg-white/20 rounded-xl transition" title="Mulai Ulang">
+                <RefreshCw size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-pink-50/20">
+              {messages.map((msg, index) => (
+                <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-2xl p-4 shadow-sm text-sm ${msg.role === 'user' ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-br-none font-medium' : 'bg-white border-2 border-pink-100 text-slate-700 rounded-bl-none'}`}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-white border-2 border-pink-100 text-pink-500 rounded-2xl rounded-bl-none p-4 shadow-sm flex items-center gap-2 font-medium">
+                    <Loader2 size={16} className="animate-spin" /> Lagi mikir nih Bos Ulul... 💭
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <form onSubmit={handleSend} className="p-4 bg-white border-t border-pink-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+              <div className="flex items-center gap-2 bg-pink-50 border-2 border-pink-100 rounded-2xl p-1.5 pl-4 focus-within:border-pink-300 focus-within:ring-4 focus-within:ring-pink-100 transition-all">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder={isFinished ? "Sensus beres, Bos Ulul Hebat! 🎉" : "Ketik di sini ya, Bos Ulul..."}
+                  disabled={isFinished}
+                  className="flex-1 bg-transparent border-none outline-none text-sm py-2 text-slate-700 font-medium placeholder-slate-400"
+                />
+                <button 
+                  type="submit" 
+                  disabled={isFinished || !input.trim()}
+                  className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white p-2.5 rounded-xl disabled:opacity-50 transition-all shadow-md transform active:scale-95"
+                >
+                  <Send size={18} />
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Kanan: Area Formulir Hasil Ekstraksi */}
+          <div className="hidden md:flex w-7/12 flex-col overflow-y-auto bg-pink-50/30 p-8">
+            
+            <div className="max-w-3xl mx-auto w-full space-y-6">
+              <div className="flex items-center gap-3 mb-6 bg-white p-4 rounded-2xl shadow-sm border border-pink-100">
+                <div className="bg-pink-100 p-2 rounded-xl text-pink-600">
+                  <FileText size={28} />
+                </div>
+                <h2 className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-500">Formulir Ajaib Bos Ulul ✨</h2>
+                {isFinished && (
+                   <span className="ml-auto bg-gradient-to-r from-green-400 to-emerald-500 text-white px-4 py-1.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-md animate-bounce">
+                     <CheckCircle2 size={16}/> Selesai Bos!
+                   </span>
+                )}
+              </div>
+
+              {/* Tabel 15: Pengeluaran Rumah Tangga */}
+              <div className="bg-white rounded-2xl shadow-sm border-2 border-pink-100 overflow-hidden">
+                <div className="bg-pink-50 border-b-2 border-pink-100 p-3 px-5 font-bold text-pink-700">15. Pengeluaran Rumah Tangga 🏡</div>
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-white text-slate-400 border-b border-pink-50">
+                    <tr><th className="px-5 py-2 font-semibold w-12">No</th><th className="px-5 py-2 font-semibold">Uraian</th><th className="px-5 py-2 font-semibold w-24">Periode</th><th className="px-5 py-2 font-semibold text-right w-40">Nilai (Rp)</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-pink-50">
+                    <tr className={sensusData.p15_a_listrik ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-3">15.a</td><td className="px-5 py-3">Pengeluaran listrik</td><td className="px-5 py-3 text-slate-500">Bulanan</td><td className="px-5 py-3 text-right font-bold text-purple-700">{formatRp(sensusData.p15_a_listrik)}</td>
+                    </tr>
+                    <tr className={sensusData.p15_b_pulsa ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-3">15.b</td><td className="px-5 py-3">Pengeluaran pulsa dan internet</td><td className="px-5 py-3 text-slate-500">Bulanan</td><td className="px-5 py-3 text-right font-bold text-purple-700">{formatRp(sensusData.p15_b_pulsa)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Tabel 16: Konsumsi */}
+              <div className="bg-white rounded-2xl shadow-sm border-2 border-pink-100 overflow-hidden">
+                <div className="bg-pink-50 border-b-2 border-pink-100 p-3 px-5 font-bold text-pink-700">16. Pengeluaran Konsumsi Rumah Tangga 🛒</div>
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-white text-slate-400 border-b border-pink-50">
+                    <tr><th className="px-5 py-2 font-semibold w-12">No</th><th className="px-5 py-2 font-semibold">Uraian</th><th className="px-5 py-2 font-semibold w-24">Periode</th><th className="px-5 py-2 font-semibold text-right w-40">Nilai (Rp)</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-pink-50">
+                    <tr className={sensusData.p16_a_makan_mingguan ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-3">16.a</td><td className="px-5 py-3">Rata-rata pengeluaran makanan</td><td className="px-5 py-3 text-slate-500">Mingguan</td><td className="px-5 py-3 text-right font-bold text-purple-700">{formatRp(sensusData.p16_a_makan_mingguan)}</td>
+                    </tr>
+                    <tr className={sensusData.p16_b_bukan_makan_bulan ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-3">16.b</td><td className="px-5 py-3">Rata-rata pengeluaran bukan makanan rutin</td><td className="px-5 py-3 text-slate-500">Bulanan</td><td className="px-5 py-3 text-right font-bold text-purple-700">{formatRp(sensusData.p16_b_bukan_makan_bulan)}</td>
+                    </tr>
+                    <tr className={sensusData.p16_c_bukan_makan_tahun ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-3">16.c</td><td className="px-5 py-3">Rata-rata pengeluaran bukan makanan rutin</td><td className="px-5 py-3 text-slate-500">Tahunan</td><td className="px-5 py-3 text-right font-bold text-purple-700">{formatRp(sensusData.p16_c_bukan_makan_tahun)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Tabel 26: Pengeluaran Usaha */}
+              <div className="bg-white rounded-2xl shadow-sm border-2 border-pink-100 overflow-hidden">
+                <div className="bg-pink-50 border-b-2 border-pink-100 p-3 px-5 font-bold text-pink-700">26. Rincian Pengeluaran Usaha Tahun 2025 💼</div>
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-white text-slate-400 border-b border-pink-50">
+                    <tr><th className="px-5 py-2 font-semibold w-12">No</th><th className="px-5 py-2 font-semibold">Uraian</th><th className="px-5 py-2 font-semibold text-right w-40">Nilai (Rp)</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-pink-50">
+                    <tr className={sensusData.p26_a_upah ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-2">26.a</td><td className="px-5 py-2">Total upah dan gaji serta jaminan sosial</td><td className="px-5 py-2 text-right font-bold text-purple-700">{formatRp(sensusData.p26_a_upah)}</td>
+                    </tr>
+                    <tr className={sensusData.p26_b_produksi ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-2">26.b</td><td className="px-5 py-2">Biaya produksi</td><td className="px-5 py-2 text-right font-bold text-purple-700">{formatRp(sensusData.p26_b_produksi)}</td>
+                    </tr>
+                    <tr className={sensusData.p26_c_lainnya ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-2">26.c</td><td className="px-5 py-2">Biaya lainnya</td><td className="px-5 py-2 text-right font-bold text-purple-700">{formatRp(sensusData.p26_c_lainnya)}</td>
+                    </tr>
+                    <tr className={sensusData.p26_d_operasional ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-2">26.d</td><td className="px-5 py-2">Biaya operasional (air, listrik, internet, dll)</td><td className="px-5 py-2 text-right font-bold text-purple-700">{formatRp(sensusData.p26_d_operasional)}</td>
+                    </tr>
+                    <tr className={sensusData.p26_e_non_operasional ? "bg-purple-50/50" : ""}>
+                      <td className="px-5 py-2">26.e</td><td className="px-5 py-2">Biaya non-operasional</td><td className="px-5 py-2 text-right font-bold text-purple-700">{formatRp(sensusData.p26_e_non_operasional)}</td>
+                    </tr>
+                    <tr className="bg-pink-50 font-bold text-pink-800 border-t-2 border-pink-100">
+                      <td className="px-5 py-3">26.f</td><td className="px-5 py-3">Total pengeluaran (a+b+c+d+e)</td><td className="px-5 py-3 text-right">{totalPengeluaran26f > 0 ? formatRp(totalPengeluaran26f) : '__________'}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Tabel 27: Pendapatan & Ringkasan */}
+              <div className="grid grid-cols-2 gap-4">
+                 {/* 27. Pendapatan */}
+                <div className="bg-white rounded-2xl shadow-sm border-2 border-pink-100 overflow-hidden col-span-2">
+                  <div className="bg-pink-50 border-b-2 border-pink-100 p-3 px-5 font-bold text-pink-700">27. Rincian Pendapatan Tahun 2025 💰</div>
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-white text-slate-400 border-b border-pink-50">
+                      <tr><th className="px-5 py-2 font-semibold w-12">No</th><th className="px-5 py-2 font-semibold">Uraian</th><th className="px-5 py-2 font-semibold text-right w-40">Nilai (Rp)</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-pink-50">
+                      <tr className={sensusData.p27_a_pendapatan_utama ? "bg-purple-50/50" : ""}>
+                        <td className="px-5 py-3">27.a</td><td className="px-5 py-3">Nilai produksi/pendapatan utama</td><td className="px-5 py-3 text-right font-bold text-purple-700">{formatRp(sensusData.p27_a_pendapatan_utama)}</td>
+                      </tr>
+                      <tr className={sensusData.p27_b_pendapatan_lainnya ? "bg-purple-50/50" : ""}>
+                        <td className="px-5 py-3">27.b</td><td className="px-5 py-3">Pendapatan lainnya</td><td className="px-5 py-3 text-right font-bold text-purple-700">{formatRp(sensusData.p27_b_pendapatan_lainnya)}</td>
+                      </tr>
+                      <tr className="bg-pink-50 font-bold text-pink-800 border-t-2 border-pink-100">
+                        <td className="px-5 py-3">27.c</td><td className="px-5 py-3">Total nilai produksi (a+b)</td><td className="px-5 py-3 text-right">{totalPendapatan27c > 0 ? formatRp(totalPendapatan27c) : '__________'}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Ringkasan */}
+                <div className="bg-gradient-to-br from-purple-600 to-pink-500 rounded-2xl shadow-lg overflow-hidden col-span-2 text-white transform hover:scale-[1.01] transition-transform">
+                  <div className="border-b border-white/20 p-3 px-5 font-extrabold uppercase tracking-widest text-xs flex items-center gap-2">
+                    <span>📊</span> Ringkasan Super Bos Ulul
+                  </div>
+                  <div className="flex flex-col p-6 space-y-4">
+                    
+                    <div className="flex justify-between items-center border-b border-white/20 pb-3">
+                      <div className="text-pink-100 font-medium text-sm">Total Pendapatan (Per Tahun)</div>
+                      <div className="text-2xl font-extrabold drop-shadow-sm">{totalPendapatan27c > 0 ? formatRp(totalPendapatan27c) : '__________'}</div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center border-b border-white/20 pb-3">
+                      <div className="text-pink-100 font-medium text-sm">Total Pendapatan (Per Bulan)</div>
+                      <div className="text-lg font-bold">{pendapatanBulan > 0 ? formatRp(pendapatanBulan) : '__________'}</div>
+                    </div>
+
+                    <div className={`flex justify-between items-center rounded-xl p-4 mt-2 ${isRugi ? 'bg-red-500 shadow-inner animate-pulse' : 'bg-white/20 backdrop-blur-sm border border-white/30'}`}>
+                      <div className="flex flex-col">
+                        <span className="font-bold text-sm text-white">Total Pengeluaran (Per Tahun)</span>
+                        {isRugi && (
+                          <span className="text-xs text-white font-extrabold mt-1">⚠️ Waduh Bos! Pengeluaran kebesaran nih!</span>
+                        )}
+                      </div>
+                      <div className="text-xl font-extrabold drop-shadow-sm">{totalPengeluaran26f > 0 ? formatRp(totalPengeluaran26f) : '__________'}</div>
+                    </div>
+
+                  </div>
+                </div>
+
+              </div>
+              
+              {/* Spacer untuk memastikan scroll cukup */}
+              <div className="h-10"></div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<SensusBot />);
+  </script>
+</body>
+</html>
